@@ -6,6 +6,44 @@ from bs4 import BeautifulSoup
 import sys
 import re
 import os
+import asyncio
+import scrapy
+from scrapy.crawler import CrawlerProcess
+from scrapy.utils.project import get_project_settings
+import yt_dlp
+
+# ... (mantén las funciones existentes como resource_path, set_app_icon, log_message, etc.)
+
+class AlibabaSpider(scrapy.Spider):
+    name = 'alibaba'
+    
+    def __init__(self, url, *args, **kwargs):
+        super(AlibabaSpider, self).__init__(*args, **kwargs)
+        self.start_urls = [url]
+        self.video_url = None
+
+    def parse(self, response):
+        video = response.css('video::attr(src)').get()
+        if video:
+            self.video_url = video
+
+def run_spider(url):
+    process = CrawlerProcess(get_project_settings())
+    spider = AlibabaSpider(url)
+    process.crawl(spider)
+    process.start()
+    return spider.video_url
+
+def download_with_ytdlp(url, output_path):
+    ydl_opts = {
+        'outtmpl': output_path,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            ydl.download([url])
+            return True
+        except:
+            return False
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -34,47 +72,47 @@ def log_message(message):
 
 def download_alibaba_content(url, save_folder):
     log_message(f"Iniciando descarga desde: {url}")
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
     
-    title = soup.title.string if soup.title else 'alibaba_product'
+    # Crear la carpeta del producto
+    title = 'alibaba_product'  # Título por defecto
+    try:
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        title = soup.title.string if soup.title else 'alibaba_product'
+    except:
+        pass
+    
     product_name = re.sub(r'[^\w\-_\. ]', '_', title)
-    
     product_folder = os.path.join(save_folder, product_name)
     os.makedirs(product_folder, exist_ok=True)
     log_message(f"Carpeta creada: {product_folder}")
     
-    video_url = None
-    for script in soup.find_all('script'):
-        if 'videoUrl' in script.text:
-            match = re.search(r'"videoUrl":"(.*?)"', script.text)
-            if match:
-                video_url = match.group(1)
-                break
+    # Intento con Scrapy
+    log_message("Intentando descargar con Scrapy...")
+    video_url = run_spider(url)
     
     if video_url:
-        video_response = requests.get(video_url)
+        log_message("Video encontrado con Scrapy. Descargando...")
         video_filename = os.path.join(product_folder, f"{product_name}.mp4")
-        with open(video_filename, 'wb') as f:
-            f.write(video_response.content)
-        log_message(f"Video descargado: {video_filename}")
+        try:
+            video_response = requests.get(video_url)
+            with open(video_filename, 'wb') as f:
+                f.write(video_response.content)
+            log_message(f"Video descargado: {video_filename}")
+            messagebox.showinfo("Descarga completada", f"Contenido descargado en la carpeta:\n{product_folder}")
+            return
+        except:
+            log_message("Error al descargar el video con Scrapy.")
+    
+    # Si Scrapy falla, intentar con yt-dlp
+    log_message("Scrapy no pudo encontrar el video. Intentando con yt-dlp...")
+    video_filename = os.path.join(product_folder, f"{product_name}.%(ext)s")
+    if download_with_ytdlp(url, video_filename):
+        log_message(f"Video descargado con yt-dlp: {video_filename}")
+        messagebox.showinfo("Descarga completada", f"Contenido descargado en la carpeta:\n{product_folder}")
     else:
-        log_message("No se encontró video para descargar.")
-    
-    """images = soup.find_all('img', {'src': re.compile(r'.*\.jpg')})
-    for i, img in enumerate(images):
-        img_url = img['src']
-        if not img_url.startswith('http'):
-            img_url = 'https:' + img_url
-        img_response = requests.get(img_url)
-        img_filename = os.path.join(product_folder, f"{product_name}_image_{i+1}.jpg")
-        with open(img_filename, 'wb') as f:
-            f.write(img_response.content)
-        log_message(f"Imagen descargada: {img_filename}")"""
-    
-    log_message(f"Descarga completada. Contenido guardado en: {product_folder}")
-    messagebox.showinfo("Descarga completada", f"Contenido descargado en la carpeta:\n{product_folder}")
-
+        log_message("No se pudo descargar el video con ningún método.")
+        messagebox.showerror("Error", "No se pudo descargar el video.")
 
 def select_folder():
     folder = filedialog.askdirectory()
